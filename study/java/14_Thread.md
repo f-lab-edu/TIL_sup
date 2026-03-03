@@ -551,7 +551,7 @@ I/O 대기 상태인 자바 스레드는 **RUNNABLE** 상태이다.
 
 자바(Java)에서 멀티스레드 환경일 때, 각 스레드마다 독립적인 저장 공간(전용 보관소)을 할당하여 스레드 간 데이터 공유를 막고 고유한 값을 안전하게 보관·사용하는 기술 및 클래스이다.
 
-즉, 스레드마다 공유 자원이 아닌 독립된 저장 공간을 부여한다는 것
+즉, 스레드마다 독립된 저장 공간을 부여한다는 것
 
 **멀티 스레드 환경에서는 스레드간 공유시 발생하는 문제점이 있다.**
 
@@ -565,6 +565,108 @@ Thread-Safe 하지 않는다면, 레이스 컨디션 문제가 발생할 수 있
 이러한 방식도 성능 저하, 데드락, 설계 복잡도와 같은 문제점이 존재한다.
 
 그래서 Thread Local을 통해 각 스레드마다 Thread 객체와 연결된 전용 저장 공간을 만들어 해결할 수 있다.
+
+좀 더 파헤쳐 Thread Local을 구동하는 방식을 알아보자.
+
+각 스레드는 ThreadLocal의 내부 클래스 ThreadLocalMap 객체를 참조 필드를 가지고 있다.
+
+```java
+public class Thread implements Runnable {
+/* ThreadLocal values pertaining to this thread. This map is maintained
+     * by the ThreadLocal class. */
+    ThreadLocal.ThreadLocalMap threadLocals = null;
+}
+```
+
+```java
+public class ThreadLocal<T> {
+		public void set(T value) {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null) {
+            map.set(this, value);
+        } else {
+            createMap(t, value);
+        }
+    }
+    
+		void createMap(Thread t, T firstValue) {
+		   t.threadLocals = new ThreadLocalMap(this, firstValue);
+		}
+}
+```
+
+그리고 ThreadLocalMap에는 Entry[](Entry 배열)이 있는데, Entry[]은 hash 값을 계산해서 인덱스를 저장하는데 이는 ThreadLocal의 hashcode로 계산한다. 이 의미는 Entry[]은 ThreadLocal의 hashcode를 key 값으로 하여 저장한다는 말인데
+
+즉, Thread가 가지는 ThreadLocalMap은 Entry에 값을 저장할 때 ThreadLocal의 개수만큼 넣을 수 있다는 의미이다.
+
+ThreadLocalMap은 생성한 ThreadLocal에 값을 처음 set하면 생성된다.
+
+- Thread : ThreadLocalMap = 1 : 1
+- ThreadLocalMap : ThreadLocal = 1 : N (또는 ThreadLocal : ThreadLocalMap = N : N)
+
+### ThreadLocal 사용예시
+
+Spring 프레임워크에서 내부 인프라로 ThreadLocal을 꽤 많이 쓴다.
+
+그 이유는 “요청/트랜잭션 처리 중에 여러 레이어에서 공통 컨텍스트를 파라미터로 계속 넘기지 않고도 접근하는 용도”로 많이 쓰인다.
+
+그 예시로 Spring Security에서 ContextHolder로 Context를 생성할 때 ThreadLocal이 사용되는 것을 볼 수 있다.
+
+```java
+final class ThreadLocalSecurityContextHolderStrategy implements SecurityContextHolderStrategy {
+	private static final ThreadLocal<Supplier<SecurityContext>> contextHolder = new ThreadLocal<>();
+}
+```
+
+이러한 경우 스레드마다 SecurityContext가 하나만 존재하게 된다.
+
+- Thread A: A.threadLocals 안에 (TL -> valueA) **1개**
+- Thread B: B.threadLocals 안에 (TL -> valueB) **1개**
+- Thread C: C.threadLocals 안에 (TL -> valueC) **1개**
+
+그렇기 때문에 스레드(Request)마다 로그인과 같은 권한 기능을 ThreadLocal을 통해 구현할 수 있다.
+
+즉, set()을 여러 번 해도 ThreadLocal은 1개이기 때문에 같은 엔트리의 value만 덮어쓴다.
+
+하지만, 이러한 경우 스레드 풀에서 문제가 생기는데 스레드 풀에서는 스레드를 재사용하기 때문에 이전 정보가 그대로 남아있을 수 있다. 그래서 스레드 풀에서는 스레드가 사용이 끝나면 remove()로 스레드 로컬 정보를 제거해줘야 한다.
+
+이외에는
+
+- **트랜잭션 - TransactionSynchronizationManager**
+- **웹 요청 컨텍스트 - RequestContextHolder**
+- **로케일 언어 - LocaleContextHolder**
+
+정리하면,
+
+- 요청/트랜잭션 같은 스레드 단위의 실행 컨텍스트를 만들기 좋다
+- 파라미터로 컨텍스트를 계속 넘기는 불편을 줄인다
+- 대신 스레드풀에서는 요청이 끝나면 clear/remover가 필수라서, 스프링은 보통 필터/인터셉터 레벨에서 경계 관리를 해준다.
+
+### 멀티 스레딩
+
+> 멀티 스레딩은 **하나의 프로세스 안에서 여러 “스레드(실행 흐름)”가 동시에(또는 번갈아가며) 실행되도록 하는 방식이다.**
+즉, 멀티 스레딩 = **힙/전역 자원을 공유하면서 실행 흐름을 여러 개로 늘리는 것**.
+>
+- CPU 코어가 1개면 실제로는 시분할 방식으로 빠르게 번갈아 실행 되어 동시에 실행하는 것처러 보이게 함
+- CPU 코어가 여러 개면 물리적으로 동시에 실행됨
+
+**장점**
+
+- 응답성 : UI/서버에서 한 작업이 오래 걸려도 다른 작업이 멈추지 않게 한다.
+- 처리량 : I/O(네트워크/디스크) 대기 시간 동안 다른 작업을 할 수 있어 자원을 더 효율적으로 사용한다.
+- 병렬성 : CPU 계산을 코어 수만큼 나눠서 빠르게 처리 가능하다.
+
+**단점**
+
+- 공유 자원 경쟁
+  - 같은 힙 객체/상태를 여러 스레드가 공유하면 레이스 컨디션이 발생할 수 있다.
+  - 동기화 방식으로 해결해야 한다. (synchronized, Lock, Atomic, 불변 객체, 메시지 패싱
+- 가시성/재정렬 문제
+  - 한 스레드가 바꾼 값이 다른 스레드에 바로 보인다는 보장이 없다(캐시/재정렬)
+  - volatile, Lock, happens-before 관계로 보장
+- 디버깅
+  - 재현이 어렵고, 상황에 따라 증사이 바뀐다.
 
 ---
 
