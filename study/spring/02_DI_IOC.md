@@ -21,6 +21,54 @@ public class UserService {
 
 코드 예시와 같이 객체의 생성자 인자로 객체를 받아서 내부 변수에 할당하는 방식이다. 이렇게 하변 빈의 불변성을 보장할 수 있다.
 
+이 방법은 객체가 생성될 대 의존성을 한번에 주입받기 때문에 의존성 주입 후에 변경이 불가능하다는 점에서 불변성을 확보할 수 있다. Spring에서도 생성자 주입 방식을 지향한다.
+
+또한, 롬복 어노테이션을 이용해 생성자를 작성하지 않고도 사용할 수 있다.
+```
+@RequiredArgsConstructor
+public class UserService {
+    private final UserRepository userRepository;
+
+}
+```
+```@RequiredArgsConstructor```는 아직 초기화 되지 않는 final 필드, @NonNull이 마크돼있는 모든 필드들에 대한 생성자를 자동으로 생성해준다. 그렇게 되면, 스프링은 생성자 기반 의존성 주입을 통해 필요한 빈을 주입할 수 있다.
+
+@NonNull로 마크 돼있는 필드들은 null-check가 추가적으로 생성되며, @NonNull이 마크되어 있지만, 파라미터에서 null값이 들어온다면 생성자에서 NullPointerException이 발생한다.
+
+**장점**
+- 불변성을 보장한다.
+- 생성자 코드가 없어져 코드가 간결해진다.
+- 필드가 추가되어도 생성자 코드를 수정할 필요가 없다.
+
+**단점**
+- 생성자 코드가 사라져 명시적인 의도를 파악할 수 없다.
+- final 필드나 @NonNull 필드 순서가 바뀌거나 타입이 변경될 때, 생성자의 인자 순서가 자동으로 바뀌어 버그가 발생할 가능성이 있다.
+- 단순히 final 필드를 초기화하는 것 외에 생성자 내에서 추가적인 로직을 수행하기 어렵다.
+
+#### 필드 주입 DI
+필드 주입은 필드에 바로 의존 관계를 주입하는 방법이다.
+@Autowired를 사용해서 주입할 수 있다.
+
+```
+@Service
+public class UserService {
+
+	@Autowired
+	private UserRepository userRepository;
+
+}
+```
+
+스프링에서 한 때 필드 주입을 많이 사용했으나, 지금은 지양한다.
+단점은 다음과 같다.
+- 외부에서 변경이 불가능해진다. 이는 테스트 코드 또한 작성하기 어려워 지게 한다.
+- final 키워드를 붙일 수 없다.
+- 순환참조를 막을 수 없다. a가 b를 b가 a를 서로 참조할 때 실행전 에러를 잡을 수 없다.
+
+
+필드 주입을 이용하면 코드가 간결해지나, 외부에서 접근이 불가능하다는 단점이 있다. 그렇게 되면, 테스트 코드를 작성하기 어려워지며, 필드 주입은 반드시 DI 프레임워크가 존재해야 한다.
+
+
 #### Factory Method 기반 DI
 ```
 public class ServiceFactory {
@@ -38,6 +86,7 @@ public class UserService {
     private UserRepository userRepository;
 
     // 객체 생성 후 프로퍼티 설정
+		@Autowired
     public void setUserRepository(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
@@ -45,6 +94,33 @@ public class UserService {
 ```
 
 객체 생성 후, setter 메서드를 통해서 의존성을 주입한다. 생성 후에 의존성을 변경해야 하거나 선택적인 의존성이 있을 때 사용한다.
+
+**장점**
+- 선택적 의존성 관리 : 의존성이 없어도 객체 생성이 가능하다. 필수가 아닌 경우 required=false를 통해 유연하게 처리할 수 있다.
+- 재설정 가능 : 객체 생성 후에도 의존성을 나중에 변경해야 하는 경우 유리하다.
+
+**단점**
+- 불변성 결여 : final로 선언할 수 없어, 객체 생성 이후에 의존성이 변결될 수 있어 안전하지 않다.
+- 주입 누락 위험 : 객체 생성 후 setter가 호출되지 않으면 NullPointerExcpetion이 날 수 있다.
+
+
+#### 스프링에서 생성자 주입 방식을 지향하는 이유
+스프링에서 생성자 주입 방식을 지향하는 이유는 다음과 같다.
+
+1. 의존성 불변성 유지
+- final 키워드 사용 가능
+- 안정성 : 애플리케이션 실행 중에 실수로 의존성 객체가 변경되는 런타임 오류를 방지한다.
+
+2. 필수 의존성 주입 강제
+- 컴파일 시점에 의존성이 주입되지 않으면 컴파일 에러가 발생한다.
+
+3. 순환 참조 방지
+- 순환 참조하는 경우 스프링은 어플리케이션 구동 시점에 이를 감지하고 BeanCurrentlyInCreationException을 발생 시킨다.
+
+4. 테스트 용이성
+-  스프링 컨테이너를 띄우지 않고, 순수 자바 코드에서 new 키워드로 Mock 객체를 주입하기 쉬어진다.
+-  불변 객체이므로 생성자 테스트가 명확해진다.
+
 
 #### DI 장점
 1. 객체 간의 결합도를 낮춘다
@@ -85,7 +161,7 @@ IoC 컨테이너와 프록시 패턴을 사용하면 AOP가 가능하게 된다.
 이 구조에서 문제점은 다음과 같다.
 
 1. OrderService가 MemoryOrderRepository라는 구체 클래스를 알고 있다.
-    - OrderService는 구현제에 의존하게 되어 강한 결합이 된다.
+   - OrderService는 구현제에 의존하게 되어 강한 결합이 된다.
 
 이러한 경우 MemoryOrderRepository가 아닌 다른 Repsitory 구현체로 변경한다면
 OrderService 내부 코드가 변경된다. (수정 영향을 받게 됨)
